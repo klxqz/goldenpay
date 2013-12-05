@@ -13,19 +13,10 @@
 class goldenpayPayment extends waPayment implements waIPayment {
 
     private $url = 'http://66.135.38.46:80/ecomm/getmoney';
-    private $order_id;
+    private $server = 'http://66.135.38.46:80/';
+    private $trans_id;
     private $currency = array(
-        '840' => 'USD',
-        '980' => 'UAH',
-        '810' => 'RUB',
-        '946' => 'RON',
-        '398' => 'KZT',
-        '417' => 'KGS',
-        '392' => 'JPY',
-        '826' => 'GBR',
-        '978' => 'EUR',
-        '156' => 'CNY',
-        '974' => 'BYR',
+        'AZN',
     );
 
     public function allowedCurrency() {
@@ -43,6 +34,10 @@ class goldenpayPayment extends waPayment implements waIPayment {
         $view->assign('order', $order_data);
         $view->assign('settings', $this->getSettings());
         $form = array();
+        //echo $this->app_id.'merchant_id'.$this->merchant_id;
+        //$plugin_id = array('shop', 'weather');
+        //$app_settings_model = new waAppSettingsModel();
+        //$app_settings_model->set($plugin_id, 'status', '1');
 
         $ct = 'v'; //cardtype
 
@@ -59,12 +54,10 @@ class goldenpayPayment extends waPayment implements waIPayment {
     }
 
     protected function callbackInit($request) {
-        if (!empty($request['orderId'])) {
-
-            $params = json_decode(base64_decode($request['params']), true);
-            $this->app_id = $params['app_id'];
-            $this->merchant_id = $params['merchant_id'];
-            $this->order_id = $request['orderId'];
+        if (!empty($request['trans_id'])) {
+            $this->app_id = 'shop'; //$params['app_id'];
+            $this->merchant_id = '20'; //$params['merchant_id'];
+            $this->trans_id = $request['trans_id'];
         } elseif (!empty($request['app_id'])) {
             $this->app_id = $request['app_id'];
         }
@@ -74,61 +67,30 @@ class goldenpayPayment extends waPayment implements waIPayment {
 
     protected function callbackHandler($request) {
 
-        if (!$this->order_id) {
-            throw new waPaymentException('Ошибка. Не верный номер заказа');
+        if (!$this->trans_id) {
+            throw new waPaymentException('Ошибка. Не задан идентификатор транзакции');
         }
 
-        if ($this->sandbox) {
-            $url = $this->test_url . 'getOrderStatus.do';
-        } else {
-            $url = $this->url . 'getOrderStatus.do';
-        }
-
+        $url = $this->server . 'ecomm/getstat';
 
         $params = array(
-            'userName' => $this->userName,
-            'password' => $this->password,
-            'orderId' => $this->order_id,
+            'm' => $this->userName . $request['m'],
+            'transId' => str_replace('+', "%2b", $request['trans_id'])
         );
         $request = $this->sendData($url, $params);
         $transaction_data = $this->formalizeData($request);
 
-
-        if ($request['ErrorCode'] == 0 && $request['OrderStatus'] == 2) {
-            $message = $request['ErrorMessage'];
+        if ($transaction_data['success'] == "1" && $transaction_data['checked'] == "0") {
+            $message = "Оплата прошла успешно";
             $app_payment_method = self::CALLBACK_PAYMENT;
             $transaction_data['state'] = self::STATE_CAPTURED;
             $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_SUCCESS, $transaction_data);
         } else {
-            switch ($request['ErrorCode']) {
-
-                case 2:
-                    $message = 'Заказ отклонен по причине ошибки в реквизитах платежа.';
-                    $app_payment_method = self::CALLBACK_DECLINE;
-                    $transaction_data['state'] = self::STATE_DECLINED;
-                    $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_FAIL, $transaction_data);
-                    break;
-                case 5:
-                    $message = 'Ошибка значения параметра запроса.';
-                    $app_payment_method = self::CALLBACK_DECLINE;
-                    $transaction_data['state'] = self::STATE_DECLINED;
-                    $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_FAIL, $transaction_data);
-                    break;
-                case 6:
-                    $message = 'Незарегистрированный OrderId.';
-                    $app_payment_method = self::CALLBACK_DECLINE;
-                    $transaction_data['state'] = self::STATE_DECLINED;
-                    $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_FAIL, $transaction_data);
-                    break;
-                default:
-                    $message = $request['ErrorMessage'];
-                    $app_payment_method = self::CALLBACK_DECLINE;
-                    $transaction_data['state'] = self::STATE_DECLINED;
-                    $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_FAIL, $transaction_data);
-                    break;
-            }
+            $message = "Оплата прошла с ошибкой";
+            $app_payment_method = self::CALLBACK_DECLINE;
+            $transaction_data['state'] = self::STATE_DECLINED;
+            $url = $this->getAdapter()->getBackUrl(waAppPayment::URL_FAIL, $transaction_data);
         }
-
 
         $transaction_data = $this->saveTransaction($transaction_data, $request);
         $result = $this->execAppCallback($app_payment_method, $transaction_data);
@@ -185,27 +147,19 @@ class goldenpayPayment extends waPayment implements waIPayment {
             throw new waException('Пустой ответ от сервера');
         }
 
-        $json = json_decode($response, true);
-
-        if (!is_array($json)) {
-            throw new waException('Ошибка оплаты. ' . $response);
-        }
-
-
-
-        return $json;
+        return $response;
     }
 
     protected function formalizeData($transaction_raw_data) {
-        $currency_id = $transaction_raw_data['currency'];
-
         $transaction_data = parent::formalizeData($transaction_raw_data);
-        $transaction_data['native_id'] = $this->order_id;
-        $transaction_data['order_id'] = $transaction_raw_data['OrderNumber'];
-        $transaction_data['currency_id'] = $this->currency[$currency_id];
-        $transaction_data['amount'] = $transaction_raw_data['Amount'];
-        //$transaction_data['view_data'] = 'view_data';
+        $dom = new DOMDocument("1.0", "UTF-8");
+        $dom->encoding = 'UTF-8';
+        $dom->loadXML($transaction_raw_data);
 
+        $transaction_data['trans_id'] = @$dom->getElementsByTagName('trans_id')->item(0)->nodeValue;
+        $transaction_data['amount'] = @$dom->getElementsByTagName('amount')->item(0)->nodeValue;
+        $transaction_data['success'] = @$dom->getElementsByTagName('success')->item(0)->nodeValue;
+        $transaction_data['checked'] = @$dom->getElementsByTagName('checked')->item(0)->nodeValue;
 
         return $transaction_data;
     }
