@@ -34,17 +34,15 @@ class goldenpayPayment extends waPayment implements waIPayment {
         $view->assign('order', $order_data);
         $view->assign('settings', $this->getSettings());
         $form = array();
-        //echo $this->app_id.'merchant_id'.$this->merchant_id;
-        //$plugin_id = array('shop', 'weather');
-        //$app_settings_model = new waAppSettingsModel();
-        //$app_settings_model->set($plugin_id, 'status', '1');
+
+        $params = base64_encode(json_encode(array('app_id' => $this->app_id, 'merchant_id' => $this->merchant_id, 'order_id' => $order_data['order_id'])));
 
         $ct = 'v'; //cardtype
 
         $form['m'] = $this->userName . $ct;
         $form['amount'] = $order->total * 100;
-        $form['desc'] = "";
-        $form['lang'] = "lv";
+        $form['desc'] = $params;
+        $form['lang'] = $this->lang;
         $form['cs'] = md5($form['m'] . ($form['amount']) . $form['desc'] . $this->password);
 
         $view->assign('form', $form);
@@ -55,8 +53,31 @@ class goldenpayPayment extends waPayment implements waIPayment {
 
     protected function callbackInit($request) {
         if (!empty($request['trans_id'])) {
-            $this->app_id = 'shop'; //$params['app_id'];
-            $this->merchant_id = '20'; //$params['merchant_id'];
+            try {
+                $wamodel = new waModel();
+                $sql = "SELECT * FROM `shop_plugin` WHERE `plugin`='goldenpay'";
+                $plugin = $wamodel->query($sql)->fetch();
+                if ($plugin) {
+                    $plugin_id = $plugin['id'];
+                    $sql = "SELECT * FROM `shop_plugin_settings` WHERE `id`='$plugin_id' AND `name`='userName'";
+                    $result = $wamodel->query($sql)->fetch();
+                    if ($result) {
+                        $userName = $result['value'];
+
+                        $url = $this->server . 'ecomm/getstat';
+                        $params = array(
+                            'm' => $userName . $request['m'],
+                            'transId' => str_replace('+', "%2b", $request['trans_id'])
+                        );
+                        $response = $this->sendData($url, $params);
+                        $transaction_data = $this->formalizeData($response);
+                        $this->app_id = $transaction_data['app_id'];
+                        $this->merchant_id = $transaction_data['merchant_id'];
+                    }
+                }
+            } catch (Exception $e) {
+                //$error = $e->getMessage();
+            }
             $this->trans_id = $request['trans_id'];
         } elseif (!empty($request['app_id'])) {
             $this->app_id = $request['app_id'];
@@ -80,7 +101,7 @@ class goldenpayPayment extends waPayment implements waIPayment {
         $request = $this->sendData($url, $params);
         $transaction_data = $this->formalizeData($request);
 
-        if ($transaction_data['success'] == "1" && $transaction_data['checked'] == "0") {
+        if ($transaction_data['success'] == "1") {
             $message = "Оплата прошла успешно";
             $app_payment_method = self::CALLBACK_PAYMENT;
             $transaction_data['state'] = self::STATE_CAPTURED;
@@ -158,8 +179,15 @@ class goldenpayPayment extends waPayment implements waIPayment {
 
         $transaction_data['trans_id'] = @$dom->getElementsByTagName('trans_id')->item(0)->nodeValue;
         $transaction_data['amount'] = @$dom->getElementsByTagName('amount')->item(0)->nodeValue;
+        $transaction_data['description'] = @$dom->getElementsByTagName('description')->item(0)->nodeValue;
         $transaction_data['success'] = @$dom->getElementsByTagName('success')->item(0)->nodeValue;
         $transaction_data['checked'] = @$dom->getElementsByTagName('checked')->item(0)->nodeValue;
+
+        $params = json_decode(base64_decode($transaction_data['description']), true);
+        $transaction_data['native_id'] = $params['order_id'];
+        $transaction_data['order_id'] = $params['order_id'];
+        $transaction_data['app_id'] = $params['app_id'];
+        $transaction_data['merchant_id'] = $params['merchant_id'];
 
         return $transaction_data;
     }
