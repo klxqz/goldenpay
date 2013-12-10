@@ -8,7 +8,6 @@
  *
  * @property-read string $userName
  * @property-read string $password
- * @property-read string $sandbox
  */
 class goldenpayPayment extends waPayment implements waIPayment {
 
